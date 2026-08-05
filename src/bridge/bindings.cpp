@@ -1,6 +1,8 @@
 #include "invoke.hpp"
 
+#include <map>
 #include <string.h>
+#include <string>
 
 namespace mml
 {
@@ -63,12 +65,29 @@ int handle_index( lua_State* L )
     return 1;
 }
 
+// Parameter names, keyed by C name. Only used where the count matches what the
+// compiler deduced, so a header-parse slip costs labels rather than accuracy.
+const std::map<std::string, std::string>& arg_names()
+{
+    static const std::map<std::string, std::string> m = []
+    {
+        std::map<std::string, std::string> t;
+#define MM_ARGS( n, packed ) t[#n] = packed;
+#include "api_args.inc"
+#undef MM_ARGS
+        return t;
+    }();
+    return m;
+}
+
 int open_raw_api( lua_State* L )
 {
-    int bound = 0;
-    lua_newtable( L );
+    lua_newtable( L );  // functions
+    lua_newtable( L );  // signatures
 
-#define MM_FN( name ) bound += register_member<&MinaModAPI::name>( L, #name );
+    const auto& names = arg_names();
+    int bound = 0;
+#define MM_FN( n ) bound += register_member<&MinaModAPI::n>( L, #n, names );
 #include "api_list.inc"
 #undef MM_FN
 

@@ -10,7 +10,6 @@
 #include <string.h>
 
 #include <string>
-#include <string_view>
 
 extern "C"
 {
@@ -20,32 +19,6 @@ extern "C"
 
 namespace mml
 {
-
-// Handle types are incomplete, so there is nothing to hang a trait on and no way
-// to name one without a macro list that would drift from the header.
-// __PRETTY_FUNCTION__ / __FUNCSIG__ work regardless, because they only name the
-// template argument.
-template <typename T>
-constexpr std::string_view type_name()
-{
-#if defined( __clang__ ) || defined( __GNUC__ )
-    constexpr std::string_view p = __PRETTY_FUNCTION__;
-    constexpr size_t b = p.find( "T = " ) + 4;
-    constexpr size_t e = p.find_first_of( ";]", b );
-    return p.substr( b, e - b );
-#elif defined( _MSC_VER )
-    constexpr std::string_view p = __FUNCSIG__;
-    constexpr size_t b = p.find( "type_name<" ) + 10;
-    constexpr size_t e = p.rfind( ">(" );
-    std::string_view s = p.substr( b, e - b );
-    // MSVC spells it "struct ycEntity" / "class World".
-    if ( s.rfind( "struct ", 0 ) == 0 ) s.remove_prefix( 7 );
-    if ( s.rfind( "class ", 0 ) == 0 ) s.remove_prefix( 6 );
-    return s;
-#else
-    return "?";
-#endif
-}
 
 // Dense runtime id per handle type, so HandleTable can reject a World* handed to
 // something expecting a ycEntity*.

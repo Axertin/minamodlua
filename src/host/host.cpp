@@ -96,8 +96,11 @@ bool start_lua( uint32_t gameRevision )
     const int bound = mml::open_raw_api( g_L );
     mml::log::write( "bound %d of %d MinaModAPI functions", bound, MINAMODLUA_API_COUNT );
 
+    // open_raw_api leaves the functions and their signatures; both hang off mina
+    // so a mod can list what exists and what it takes.
     lua_newtable( g_L );
-    lua_insert( g_L, -2 );
+    lua_insert( g_L, -3 );
+    lua_setfield( g_L, -3, "signatures" );
     lua_setfield( g_L, -2, "raw" );
 
     if ( !mml::events_open( g_L ) )

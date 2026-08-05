@@ -7,7 +7,10 @@
 
 #pragma once
 
+#include "describe.hpp"
+
 #include "marshal.hpp"
+#include <map>
 
 namespace mml
 {
@@ -169,9 +172,9 @@ int wrap( lua_State* L )
     static_assert( sig_of<PM>.supported, "this MinaModAPI member has no generic binding - it needs a hand-written "
                                          "wrapper (variadic, callback parameter, or raw void*)" );
 
-    // Each wrapper carries its own name as upvalue 1, so errors can say
-    // `mina.raw.PlayerSetPos: bad argument #2` rather than the `?` LuaJIT
-    // usually recovers for a C function.
+    // Each wrapper carries its own Lua name as upvalue 1, so errors can say
+    // `player_set_pos: bad argument #2` rather than the `?` LuaJIT usually
+    // recovers for a C function.
     const char* fn = lua_tostring( L, lua_upvalueindex( 1 ) );
 
     // A slot can be null even at a matching API version, and calling through it
@@ -185,25 +188,33 @@ int wrap( lua_State* L )
 // Returns 1 if the member has a generic binding, 0 if it needs a hand-written
 // wrapper and was skipped.
 template <auto PM>
-inline int register_member( lua_State* L, const char* name )
+inline int register_member( lua_State* L, const char* name, const std::map<std::string, std::string>& argNames )
 {
     if constexpr ( sig_of<PM>.supported )
     {
-        lua_pushstring( L, name );
+        const std::string lua = to_snake_case( name );
+
+        lua_pushstring( L, lua.c_str() );
         lua_pushcclosure( L, wrap<PM>, 1 );
-        lua_setfield( L, -2, name );
+        lua_setfield( L, -3, lua.c_str() );
+
+        const auto it = argNames.find( name );
+        const std::string sig = signature_of<PM>( it == argNames.end() ? std::string() : it->second );
+        lua_pushlstring( L, sig.data(), sig.size() );
+        lua_setfield( L, -2, lua.c_str() );
         return 1;
     }
     else
     {
         (void)L;
         (void)name;
+        (void)argNames;
         return 0;
     }
 }
 
-// Builds the raw binding table, leaves it on the stack, and returns how many
-// members it bound.
+// Leaves the function table and a parallel table of signature strings on the
+// stack, and returns how many members bound.
 int open_raw_api( lua_State* L );
 
 }  // namespace mml

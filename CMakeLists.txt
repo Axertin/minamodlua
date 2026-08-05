@@ -34,6 +34,11 @@ set(MML_MODS_DIR "${CMAKE_BINARY_DIR}/mods")
 
 add_subdirectory(src/bridge)
 add_subdirectory(src/host)
+# Builds a host-side tool, so it has no meaning when cross-compiling: the mingw
+# lane would produce a Windows .exe the build machine cannot run.
+if(NOT CMAKE_CROSSCOMPILING)
+    add_subdirectory(tools/apidoc)
+endif()
 
 if(WIN32)
     set(MML_DEPLOY_DIR "$ENV{APPDATA}/Yacht Club Games/Mina the Hollower/mods")

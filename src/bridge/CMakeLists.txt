@@ -5,6 +5,10 @@ mml_generate_api_list(
     "${MINAMODAPI_SOURCE_DIR}/MinaModAPI.h"
     "${CMAKE_CURRENT_BINARY_DIR}/api_list.inc")
 
+mml_generate_api_args(
+    "${MINAMODAPI_SOURCE_DIR}/MinaModAPI.h"
+    "${CMAKE_CURRENT_BINARY_DIR}/api_args.inc")
+
 add_library(mml_bridge OBJECT
     bindings.cpp
     handle.cpp)

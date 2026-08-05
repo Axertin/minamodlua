@@ -26,6 +26,36 @@ jobs:
           git ls-files -z '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hpp' '*.hxx' \
             | xargs -0 -r /tmp/cf/bin/clang-format --dry-run --Werror
 
+  apidoc:
+    name: API reference is current
+    needs: format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Regenerate
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build --target apidoc
+      # The reference is derived from the same headers the wrappers are, so a
+      # diff here means the SDK moved and docs/api-reference.md was not regenerated.
+      - name: Check it is committed
+        run: |
+          if [ ! -f docs/api-reference.md ]; then
+            echo "::error::docs/api-reference.md was not produced - the apidoc target did not write it"
+            exit 1
+          fi
+          # --intent-to-add first: `git diff` reports nothing for an untracked
+          # path and exits 0, so without this a reference that was generated but
+          # never committed would pass this gate forever.
+          git add --intent-to-add docs/api-reference.md
+          if ! git diff --exit-code -- docs/api-reference.md; then
+            echo "::error::docs/api-reference.md is stale or uncommitted - run: cmake --build build --target apidoc"
+            exit 1
+          fi
+
   build-linux:
     name: Build (Linux x86_64, ${{ matrix.cc }})
     needs: format

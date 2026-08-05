@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <string_view>
 #include <type_traits>
 
 namespace mml
@@ -31,6 +32,32 @@ struct is_complete<T, std::void_t<decltype( sizeof( T ) )>> : std::true_type
 
 template <typename T>
 inline constexpr bool is_complete_v = is_complete<T>::value;
+
+// Handle types are incomplete, so there is nothing to hang a trait on and no way
+// to name one without a macro list that would drift from the header.
+// __PRETTY_FUNCTION__ / __FUNCSIG__ work regardless, because they only name the
+// template argument.
+template <typename T>
+constexpr std::string_view type_name()
+{
+#if defined( __clang__ ) || defined( __GNUC__ )
+    constexpr std::string_view p = __PRETTY_FUNCTION__;
+    constexpr size_t b = p.find( "T = " ) + 4;
+    constexpr size_t e = p.find_first_of( ";]", b );
+    return p.substr( b, e - b );
+#elif defined( _MSC_VER )
+    constexpr std::string_view p = __FUNCSIG__;
+    constexpr size_t b = p.find( "type_name<" ) + 10;
+    constexpr size_t e = p.rfind( ">(" );
+    std::string_view s = p.substr( b, e - b );
+    // MSVC spells it "struct ycEntity" / "class World".
+    if ( s.rfind( "struct ", 0 ) == 0 ) s.remove_prefix( 7 );
+    if ( s.rfind( "class ", 0 ) == 0 ) s.remove_prefix( 6 );
+    return s;
+#else
+    return "?";
+#endif
+}
 
 enum class Kind
 {
@@ -143,7 +170,8 @@ struct SigInfo
     bool has_callback = false;  // needs a trampoline
     bool has_wide = false;      // 64-bit crosses the boundary
     bool has_out = false;       // out-params become extra returns
-    bool has_opaque = false;    // raw void*
+    bool has_opaque = false;    // raw void*, in either direction
+    bool owns_string = false;   // returns char*: wrapper copies and Frees it
     bool supported = false;     // fully handled by the generic path
 };
 
@@ -165,6 +193,10 @@ struct signature<R ( * )( A... )>
         bool ok = ( ret != Kind::Unsupported ) && ( ret != Kind::PodOut ) && ( ret != Kind::Callback ) &&
                   ( ret != Kind::Opaque );
         if ( ret == Kind::Wide ) s.has_wide = true;
+        // Alloc and WeakPtrGet are refused for their void* *return*; without
+        // this they report "no generic mapping" instead of the real reason.
+        if ( ret == Kind::Opaque ) s.has_opaque = true;
+        if ( ret == Kind::OwnedCString ) s.owns_string = true;
 
         for ( size_t i = 1; i < sizeof( args ) / sizeof( args[0] ); ++i )
         {

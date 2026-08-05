@@ -1,0 +1,4 @@
+# The API reference is generated and diffed against the committed copy in CI, so
+# it has to round-trip byte-for-byte. Pinning it to LF keeps a Windows checkout
+# from rewriting every line to CRLF and failing that gate on line endings alone.
+docs/api-reference.md text eol=lf
