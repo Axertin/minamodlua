@@ -74,6 +74,18 @@ jobs:
             exit 1
           fi
 
+      # The Lua layer is staged by a POST_BUILD step, so a broken stage would
+      # ship a drop-in that loads but gives mods only the raw bindings.
+      - name: Assert the drop-in is complete
+        shell: bash
+        run: |
+          for f in minamodlua/mod.so minamodlua/mod.yc minamodlua/lua/mina/init.lua; do
+            if [ ! -f "build/mods/$f" ]; then
+              echo "::error::build/mods/$f is missing from the drop-in"
+              exit 1
+            fi
+          done
+
       # upload the clang build, not the gcc one
       - name: Upload mod drop-in (Linux)
         if: matrix.cc == 'clang'
@@ -127,6 +139,18 @@ jobs:
             echo "::error::$dll exports ${names:-<nothing parsed>}, want MinaMod_Init only"
             exit 1
           fi
+
+      # The Lua layer is staged by a POST_BUILD step, so a broken stage would
+      # ship a drop-in that loads but gives mods only the raw bindings.
+      - name: Assert the drop-in is complete
+        shell: bash
+        run: |
+          for f in minamodlua/mod.dll minamodlua/mod.yc minamodlua/lua/mina/init.lua; do
+            if [ ! -f "build/mods/$f" ]; then
+              echo "::error::build/mods/$f is missing from the drop-in"
+              exit 1
+            fi
+          done
 
       - name: Upload mod drop-in (Windows)
         uses: actions/upload-artifact@v4

@@ -121,7 +121,87 @@ bool run_file( lua_State* L, const ModInfo& mod, const char* filename, bool requ
     return ctx.ran;
 }
 
+struct LayerCtx
+{
+    const fs::path* dir;
+};
+
+const char* const kLayerKey = "minamodlua.mina";
+
+int protected_layer( lua_State* L )
+{
+    auto* c = (LayerCtx*)lua_touserdata( L, 1 );
+    const fs::path entry = *c->dir / "mina" / "init.lua";
+
+    std::string src;
+    if ( !read_file( entry, src ) )
+    {
+        log::write( "no Lua layer at %s - mods get the raw bindings only", entry.string().c_str() );
+        return 0;
+    }
+
+    // The layer is ours and runs unsandboxed, so it uses the stock require. Mods
+    // never see `package`, so widening its path here does not widen theirs.
+    const std::string dir = c->dir->generic_string();
+    lua_getglobal( L, "package" );
+    lua_getfield( L, -1, "path" );
+    const std::string path = dir + "/?.lua;" + dir + "/?/init.lua;" + lua_tostring( L, -1 );
+    lua_pop( L, 1 );
+    lua_pushstring( L, path.c_str() );
+    lua_setfield( L, -2, "path" );
+    lua_pop( L, 1 );
+
+    if ( luaL_loadbufferx( L, src.data(), src.size(), "@mina/init.lua", "t" ) != 0 )
+    {
+        log::write( "Lua layer: %s", lua_tostring( L, -1 ) );
+        lua_pop( L, 1 );
+        return 0;
+    }
+
+    lua_pushcfunction( L, error_handler );
+    lua_insert( L, -2 );
+    lua_getfield( L, LUA_REGISTRYINDEX, kLayerKey );  // mina, passed as ...
+
+    if ( lua_pcall( L, 1, 1, -3 ) != 0 )
+    {
+        log::write( "Lua layer: %s", lua_tostring( L, -1 ) );
+        lua_pop( L, 2 );
+        return 0;
+    }
+
+    if ( lua_istable( L, -1 ) )
+        lua_setfield( L, LUA_REGISTRYINDEX, kLayerKey );
+    else
+    {
+        log::write( "Lua layer returned a %s, not a table - ignoring it", luaL_typename( L, -1 ) );
+        lua_pop( L, 1 );
+    }
+
+    lua_pop( L, 1 );  // error handler
+    return 0;
+}
+
 }  // namespace
+
+void load_lua_layer( lua_State* L, const fs::path& luaDir )
+{
+    // Handed over through the registry rather than the stack, so the whole
+    // sequence including the pushes runs inside lua_cpcall.
+    lua_pushvalue( L, -1 );
+    lua_setfield( L, LUA_REGISTRYINDEX, kLayerKey );
+
+    LayerCtx ctx{ &luaDir };
+    if ( lua_cpcall( L, protected_layer, &ctx ) != 0 ) lua_pop( L, 1 );
+
+    lua_getfield( L, LUA_REGISTRYINDEX, kLayerKey );
+    if ( lua_istable( L, -1 ) )
+        lua_replace( L, -2 );
+    else
+        lua_pop( L, 1 );
+
+    lua_pushnil( L );
+    lua_setfield( L, LUA_REGISTRYINDEX, kLayerKey );
+}
 
 int load_mods( lua_State* L, const fs::path& modsDir, uint32_t gameRevision )
 {

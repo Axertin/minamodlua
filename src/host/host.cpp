@@ -32,26 +32,26 @@ namespace
 
 lua_State* g_L = nullptr;
 
-// This module lives at <mods>/minamodlua/mod.{dll,so}, so the mods folder is two
-// levels up. Taken from where this code is actually loaded from rather than
-// rebuilt from %APPDATA%, because the game can be pointed at a different folder
-// and a guess would silently find nothing.
-std::filesystem::path mods_dir()
+// Where this module was actually loaded from, rather than a path rebuilt from
+// %APPDATA%: the game can be pointed at a different folder, and a guess would
+// silently find nothing. The layout is <mods>/minamodlua/mod.{dll,so}, so the
+// mods folder is the parent and the shipped Lua sits in ./lua.
+std::filesystem::path module_dir()
 {
 #if defined( _WIN32 )
     HMODULE self = nullptr;
     if ( !GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-                              (LPCSTR)&mods_dir, &self ) )
+                              (LPCSTR)&module_dir, &self ) )
         return {};
 
     char buf[MAX_PATH];
     const DWORD n = GetModuleFileNameA( self, buf, sizeof buf );
     if ( n == 0 || n == sizeof buf ) return {};
-    return std::filesystem::path( buf ).parent_path().parent_path();
+    return std::filesystem::path( buf ).parent_path();
 #else
     Dl_info info{};
-    if ( !dladdr( (void*)&mods_dir, &info ) || !info.dli_fname ) return {};
-    return std::filesystem::path( info.dli_fname ).parent_path().parent_path();
+    if ( !dladdr( (void*)&module_dir, &info ) || !info.dli_fname ) return {};
+    return std::filesystem::path( info.dli_fname ).parent_path();
 #endif
 }
 
@@ -92,8 +92,7 @@ bool start_lua( uint32_t gameRevision )
     mml::log::write( "%s (%s), JIT %s", LUAJIT_VERSION, lua_tostring( g_L, -1 ), jit ? "on" : "off" );
     lua_pop( g_L, 1 );
 
-    // Reaches mods as mina.raw. The ergonomic layer will sit in front of it;
-    // `raw` stays as the escape hatch for whatever that layer has not covered.
+    // Reaches mods as mina.raw, under whatever the Lua layer wraps around it.
     const int bound = mml::open_raw_api( g_L );
     mml::log::write( "bound %d of %d MinaModAPI functions", bound, MINAMODLUA_API_COUNT );
 
@@ -107,17 +106,19 @@ bool start_lua( uint32_t gameRevision )
         return false;
     }
 
-    const std::filesystem::path mods = mods_dir();
-    if ( mods.empty() )
+    const std::filesystem::path home = module_dir();
+    if ( home.empty() )
     {
-        mml::log::write( "FATAL: cannot locate the mods folder from this module's own path" );
+        mml::log::write( "FATAL: cannot locate this module's own folder" );
         lua_pop( g_L, 1 );
         return false;
     }
 
+    mml::load_lua_layer( g_L, home / "lua" );
+
     // Runs during MinaMod_Init, before most engine systems exist, so mods only
     // register handlers here - the same shape as Factorio's control stage.
-    mml::load_mods( g_L, mods, gameRevision );
+    mml::load_mods( g_L, home.parent_path(), gameRevision );
     return true;
 }
 

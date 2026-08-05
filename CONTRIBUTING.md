@@ -4,20 +4,30 @@
 
 The **C++ half** binds MinaModAPI and hosts LuaJIT. See the [README](README.md) for how to build it.
 
-The **Lua half** is an ergonomic layer that sits on top of the C++ mod and provides helpers and other niceties in pure lua. 
+The **Lua half** is an ergonomic layer that sits on top of the C++ mod and provides helpers and other niceties in pure lua. It lives in [`lua/mina/`](lua/mina/). `init.lua` is handed the table the C++ side built and returns whatever mods see as `mina`; add modules beside it and require them from
+there:
+
+```lua
+-- lua/mina/init.lua
+local mina = ...
+mina.vec = require("mina.vec")
+return mina
+```
+
+It ships as files next to the binary, so changing it takes a redeploy and a game restart (no C++ rebuild). If it errors or is missing, mods still load with the raw bindings.
 
 ## The seam
 
 What the C++ side has in place before any mod code runs:
 
-|                               |                                                                                                                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `mina.raw.*`                  | All 372 SDK functions, snake_cased. Arguments type- and range-checked, out-params returned as extra values, 64-bit values never crossing as doubles. Errors surface as Lua errors rather than crashes. |
-| Receiver methods              | Most of those also live on their receiver's metatable, so `entity:get_children()` works.                                                                                                               |
-| `mina.on_event(evt, handler)` | Event registration and dispatch, with per-mod error isolation and tracebacks.                                                                                                                          |
-| Handle userdata               | `.valid`, `__eq`, `__tostring`, and generation-stamped invalidation to avoid UAF errors                                                                                                                |
-| `defines`                     | Populated at init from the running engine rather than from header constants.                                                                                                                           |
-| Per-mod environment           | Whitelist sandbox, scoped `require`, `print` routed to the mod log.                                                                                                                                    |
+|                               |                                                                                                                                                                                                    |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mina.raw.*`                  | All SDK functions, snake_cased. Arguments type- and range-checked, out-params returned as extra values, 64-bit values never crossing as doubles. Errors surface as Lua errors rather than crashes. |
+| Receiver methods              | Most of those also live on their receiver's metatable, so `entity:get_children()` works.                                                                                                           |
+| `mina.on_event(evt, handler)` | Event registration and dispatch, with per-mod error isolation and tracebacks.                                                                                                                      |
+| Handle userdata               | `.valid`, `__eq`, `__tostring`, and generation-stamped invalidation to avoid UAF errors                                                                                                            |
+| `defines`                     | Populated at init from the running engine rather than from header constants.                                                                                                                       |
+| Per-mod environment           | Whitelist sandbox, scoped `require`, `print` routed to the mod log.                                                                                                                                |
 
 Everything above that is the Lua layer's territory. Three things constrain it:
 
