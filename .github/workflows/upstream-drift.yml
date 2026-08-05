@@ -1,0 +1,166 @@
+name: upstream-drift
+
+# MinaModAPI is pinned to an exact commit (MINAMODAPI_GIT_TAG in
+# cmake/MinaModApi.cmake), which trades silent breakage for silently falling
+# behind. Once a week this asks whether upstream main has moved and, if it has,
+# files the diff of the three headers as an issue. It deliberately does not bump
+# the pin: that header diff is the only changelog this SDK has, so a human reads
+# it and decides.
+#
+# GitHub disables `schedule` after 60 days with no repo activity. If this stops
+# firing, that is why; re-enable it from the Actions tab.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://github.com/YachtClubGames/MinaModAPI.git
+  UPSTREAM_BRANCH: main
+  DRIFT_LABEL: upstream-drift
+
+jobs:
+  check:
+    name: Check MinaModAPI pin against upstream main
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned commit
+        id: pin
+        run: |
+          pin=$(sed -n 's/.*set(MINAMODAPI_GIT_TAG "\([^"]*\)".*/\1/p' cmake/MinaModApi.cmake | head -1)
+          if [ -z "$pin" ]; then
+            echo "::error file=cmake/MinaModApi.cmake::Could not read MINAMODAPI_GIT_TAG; if it was renamed, update this workflow."
+            exit 1
+          fi
+          echo "pin=$pin" >> "$GITHUB_OUTPUT"
+
+      # Full clone: the pin is a short SHA that has to be resolved, and the job
+      # diffs across a range. The repo is a few hundred KB.
+      - name: Clone upstream
+        run: git clone --quiet "$UPSTREAM" upstream
+
+      - name: Compare
+        id: cmp
+        working-directory: upstream
+        env:
+          PIN: ${{ steps.pin.outputs.pin }}
+        run: |
+          head_sha=$(git rev-parse "origin/$UPSTREAM_BRANCH")
+          if ! pin_sha=$(git rev-parse --verify --quiet "${PIN}^{commit}"); then
+            echo "::error::Pinned commit $PIN no longer exists upstream (force-push?). Investigate by hand."
+            exit 1
+          fi
+          echo "pin_sha=$pin_sha"   >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          if [ "$pin_sha" = "$head_sha" ]; then
+            echo "drifted=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::In sync with upstream $UPSTREAM_BRANCH ($head_sha)."
+          else
+            echo "drifted=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The three headers ARE the API; everything else upstream is context and
+      # gets a --stat line.
+      - name: Build the issue body
+        if: steps.cmp.outputs.drifted == 'true'
+        working-directory: upstream
+        env:
+          PIN_SHA: ${{ steps.cmp.outputs.pin_sha }}
+          HEAD_SHA: ${{ steps.cmp.outputs.head_sha }}
+        run: |
+          headers=(MinaModAPI.h MinaModTypes.h MinaModEnums.h)
+          body="$GITHUB_WORKSPACE/drift-body.md"
+
+          {
+            echo "\`cmake/MinaModApi.cmake\` pins MinaModAPI to \`$PIN_SHA\`; upstream \`$UPSTREAM_BRANCH\` is now \`$HEAD_SHA\`."
+            echo
+            git merge-base --is-ancestor "$PIN_SHA" "$HEAD_SHA" ||
+              echo "**Upstream history was rewritten or diverged** — our pin is not an ancestor of \`$UPSTREAM_BRANCH\`. Read the diff with that in mind."
+            echo
+            echo "**Nothing has been changed.** Bumping \`MINAMODAPI_GIT_TAG\` is a deliberate act: rebuild, check that every member still binds, and re-verify anything the diff touches in the ABI or the enum tables."
+            echo
+            echo "[Compare upstream](https://github.com/YachtClubGames/MinaModAPI/compare/$PIN_SHA...$HEAD_SHA)"
+            echo
+            echo "## Commits"
+            echo '```'
+            git log --no-decorate --oneline "$PIN_SHA..$HEAD_SHA"
+            echo '```'
+            echo "## Files changed"
+            echo '```'
+            git diff --stat "$PIN_SHA" "$HEAD_SHA"
+            echo '```'
+            echo "## Header diff"
+          } > "$body"
+
+          git diff "$PIN_SHA" "$HEAD_SHA" -- "${headers[@]}" > "$GITHUB_WORKSPACE/headers.diff"
+          size=$(wc -c < "$GITHUB_WORKSPACE/headers.diff")
+
+          if [ "$size" -eq 0 ]; then
+            echo "_Upstream moved, but the bound surface did not._" >> "$body"
+          # GitHub caps an issue body at 65536 characters.
+          elif [ "$size" -gt 45000 ]; then
+            {
+              echo "_The header diff is $size bytes — too large to inline:_"
+              echo '```sh'
+              echo "git clone $UPSTREAM && cd MinaModAPI"
+              echo "git diff $PIN_SHA $HEAD_SHA -- ${headers[*]}"
+              echo '```'
+            } >> "$body"
+          else
+            {
+              echo '```diff'
+              cat "$GITHUB_WORKSPACE/headers.diff"
+              echo '```'
+            } >> "$body"
+          fi
+
+      - name: Open or update the drift issue
+        if: steps.cmp.outputs.drifted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PIN_SHA: ${{ steps.cmp.outputs.pin_sha }}
+          HEAD_SHA: ${{ steps.cmp.outputs.head_sha }}
+        run: |
+          gh label create "$DRIFT_LABEL" --color FBCA04 \
+            --description "MinaModAPI pin is behind upstream main" --force
+
+          title="MinaModAPI upstream has moved: ${PIN_SHA:0:7} -> ${HEAD_SHA:0:7}"
+          existing=$(gh issue list --label "$DRIFT_LABEL" --state open --limit 1 \
+                       --json number --jq '.[0].number // empty')
+
+          # Edit in place rather than opening a second issue every week.
+          if [ -n "$existing" ]; then
+            gh issue edit "$existing" --title "$title" --body-file "$GITHUB_WORKSPACE/drift-body.md"
+          else
+            gh issue create --title "$title" --label "$DRIFT_LABEL" \
+              --body-file "$GITHUB_WORKSPACE/drift-body.md"
+          fi
+
+      # So an open drift issue always means real drift.
+      - name: Close the drift issue when back in sync
+        if: steps.cmp.outputs.drifted == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ steps.cmp.outputs.head_sha }}
+        run: |
+          # `|| true`: on a repo that has never drifted the label does not exist,
+          # and gh treats an unknown label as an error rather than an empty list.
+          existing=$(gh issue list --label "$DRIFT_LABEL" --state open --limit 1 \
+                       --json number --jq '.[0].number // empty' || true)
+          if [ -n "$existing" ]; then
+            gh issue close "$existing" \
+              --comment "Pin is back in sync with upstream \`$UPSTREAM_BRANCH\` (\`$HEAD_SHA\`)."
+          fi

@@ -1,0 +1,14 @@
+build/
+build-win/
+compile_commands.json
+
+# Editors
+.vscode/
+.idea/
+.cache/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db

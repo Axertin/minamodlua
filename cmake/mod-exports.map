@@ -1,0 +1,22 @@
+/*
+ * mod-exports.map - ELF linker version script for a native mod.
+ *
+ * The mod is dlopen'd into the game's process alongside every other mod. A
+ * symbol it exports is a symbol the dynamic linker may bind *someone else's*
+ * call to, and vice versa. That is fatal here: LuaJIT's luaconf.h stamps
+ * __attribute__((visibility("default"))) onto every LUA_API declaration, so
+ * -fvisibility=hidden does not touch lua_* / luaL_* / luaJIT_* - a mod that
+ * links LuaJIT statically still exports ~150 of them. Two mods embedding
+ * different LuaJIT builds then interpose on each other and the process dies
+ * the first time a lua_State crosses the seam.
+ *
+ * So: exactly one global symbol, the entry point the game looks up.
+ *
+ * Applied through minamodlua::luajit - see cmake/LuaJIT.cmake.
+ */
+{
+    global:
+        MinaMod_Init;
+    local:
+        *;
+};

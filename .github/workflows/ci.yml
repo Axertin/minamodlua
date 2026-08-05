@@ -1,0 +1,197 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: clang-format check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned exactly: clang-format's output drifts between majors, and an
+      # unpinned gate would churn the tree every time the runner image moves.
+      - name: Check formatting (clang-format 21.1.8)
+        run: |
+          python3 -m venv /tmp/cf
+          /tmp/cf/bin/pip install --quiet clang-format==21.1.8
+          git ls-files -z '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hpp' '*.hxx' \
+            | xargs -0 -r /tmp/cf/bin/clang-format --dry-run --Werror
+
+  build-linux:
+    name: Build (Linux x86_64, ${{ matrix.cc }})
+    needs: format
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Both: the SDK headers are C-with-C++-isms and the binding layer
+          # leans on template deduction, so the two front-ends disagree often
+          # enough that one of them alone is not a check.
+          - { cc: gcc, cxx: g++, pkgs: "gcc g++" }
+          - { cc: clang, cxx: clang++, pkgs: "clang" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ${{ matrix.pkgs }}
+
+      # MinaModAPI and LuaJIT clones. Keyed on cmake/ because both pins live
+      # there, and on the compiler because _deps holds build trees too.
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-linux-${{ matrix.cc }}-${{ hashFiles('cmake/*.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            deps-linux-${{ matrix.cc }}-${{ hashFiles('cmake/*.cmake') }}-
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+            -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+
+      - name: Build
+        run: cmake --build build
+
+      # The mod is dlopen'd into the game's process beside every other mod, so a
+      # symbol it exports is one the dynamic linker may bind someone else's call
+      # to. LuaJIT is the live hazard: luaconf.h stamps visibility("default")
+      # onto every LUA_API declaration, so -fvisibility=hidden does nothing and a
+      # static link leaks ~150 lua_* symbols unless cmake/mod-exports.map is
+      # applied. Two mods embedding different LuaJIT builds then interpose and
+      # the process dies.
+      - name: Assert the module exports only MinaMod_Init
+        run: |
+          so=build/mods/minamodlua/mod.so
+          nm -D --defined-only "$so"
+          if [ "$(nm -D --defined-only "$so" | awk '{print $NF}')" != MinaMod_Init ] || nm -D "$so" | grep -qi lua; then
+            echo "::error::$so exports more than MinaMod_Init - cmake/mod-exports.map is not being applied"
+            exit 1
+          fi
+
+      # Clang is the shipped Linux compiler; the GCC lane is a second opinion on
+      # the sources, not a second artifact.
+      - name: Upload mod drop-in (Linux)
+        if: matrix.cc == 'clang'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mods-linux-x86_64
+          path: build/mods/
+          if-no-files-found: error
+
+  build-windows:
+    name: Build (Windows x86_64, MSVC)
+    needs: format
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # Puts cl.exe, link.exe and dumpbin.exe plus INCLUDE/LIB on PATH.
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-windows-msvc-${{ hashFiles('cmake/*.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            deps-windows-msvc-${{ hashFiles('cmake/*.cmake') }}-
+
+      # MSVC is the shipped Windows toolchain: the game is MSVC-ABI and this SDK
+      # returns small structs by value, which is exactly where the MSVC and GNU
+      # ABIs disagree.
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=cl
+          -DCMAKE_CXX_COMPILER=cl
+
+      - name: Build
+        run: cmake --build build
+
+      # Same invariant as the Linux lane. On PE it comes from
+      # __declspec(dllexport) plus the link options in cmake/LuaJIT.cmake, so it
+      # is a different mechanism failing the same way.
+      - name: Assert the module exports only MinaMod_Init
+        shell: bash
+        run: |
+          dll=build/mods/minamodlua/mod.dll
+          # `//exports`, not `/exports`: MSYS mangles a lone leading slash into a
+          # Windows path. The doubled slash survives as `/exports`.
+          dumpbin //exports "$dll" | tee exports.txt
+          names=$(awk '/ordinal +hint +RVA +name/ {f=1; next}
+                       f && NF == 0 && seen {exit}
+                       f && NF >= 4 {print $NF; seen=1}' exports.txt)
+          if [ "$names" != MinaMod_Init ]; then
+            echo "::error::$dll exports ${names:-<nothing parsed>}, want MinaMod_Init only"
+            exit 1
+          fi
+
+      - name: Upload mod drop-in (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: mods-windows-x86_64
+          path: build/mods/
+          if-no-files-found: error
+
+  build-mingw:
+    # Compile-check only, never shipped: mingw-w64 produces a GNU-ABI binary and
+    # the game is MSVC-ABI. It earns its place by catching Windows #ifdef rot
+    # from a Linux runner, by keeping cmake/toolchain-mingw64.cmake from
+    # bit-rotting, and because it is the only PE export check that can run
+    # without a Windows machine.
+    name: Compile-check (mingw-w64 cross, not shipped)
+    needs: format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build g++-mingw-w64-x86-64
+
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build-win/_deps
+          key: deps-mingw-${{ hashFiles('cmake/*.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            deps-mingw-${{ hashFiles('cmake/*.cmake') }}-
+
+      - name: Configure
+        run: |
+          cmake -B build-win -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build-win
+
+      - name: Assert the module exports only MinaMod_Init
+        run: |
+          dll=build-win/mods/minamodlua/mod.dll
+          x86_64-w64-mingw32-objdump -p "$dll" > pe.txt
+          sed -n '/\[Ordinal\/Name Pointer\] Table/,/^$/p' pe.txt
+          names=$(awk '/\[Ordinal\/Name Pointer\] Table/ {f=1; next}
+                       f && NF == 0 {exit}
+                       f && /^[[:space:]]*\[/ {print $NF}' pe.txt)
+          if [ "$names" != MinaMod_Init ]; then
+            echo "::error::$dll exports ${names:-<nothing parsed>}, want MinaMod_Init only"
+            exit 1
+          fi

@@ -1,0 +1,35 @@
+# The MinaModAPI headers' style, because this code sits beside them all day:
+# Allman braces, spaces inside parentheses - foo( bar ) - and pointers bound to
+# the type. Deliberately not the style of the author's other C++ repos.
+#
+# Only the deltas from LLVM are listed. CI pins clang-format 21.1.8; run the
+# same version locally or the gate will disagree with you over trivia.
+
+BasedOnStyle: LLVM
+
+ColumnLimit: 120
+IndentWidth: 4
+BreakBeforeBraces: Allman
+PointerAlignment: Left
+BreakTemplateDeclarations: Yes
+
+# foo( bar ), but not (int)x and not empty().
+SpacesInParens: Custom
+SpacesInParensOptions:
+  InConditionalStatements: true
+  Other: true
+
+# One-line guard clauses - `if ( !ctx ) return;` - are used deliberately.
+# Multi-statement blocks always get their own lines.
+AllowShortIfStatementsOnASingleLine: WithoutElse
+
+# `};  // namespace mml`
+SpacesBeforeTrailingComments: 2
+
+# `#define` nested inside `#if` indents, hash and all, as the SDK headers do.
+IndentPPDirectives: BeforeHash
+
+# Include order is load-bearing in places - windows.h before anything that trips
+# over its macros, and MinaModAPI.h does not pull in MinaModEnums.h - so blocks
+# are sorted internally but never regrouped.
+IncludeBlocks: Preserve

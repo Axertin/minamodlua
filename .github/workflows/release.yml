@@ -1,0 +1,167 @@
+name: release
+
+# Tag push -> build both shipped targets -> attach a drop-in zip per platform.
+# The point of the project is that a Lua modder never needs a C++ toolchain, so
+# the binaries have to exist somewhere they can just download.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: Check tag is on main
+    runs-on: ubuntu-24.04
+    outputs:
+      on_main: ${{ steps.check.outputs.on_main }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      # A tag pushed from a topic branch or a local experiment should not
+      # produce a public release.
+      - name: Is the tagged commit on main?
+        id: check
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "on_main=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "on_main=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::tag $GITHUB_REF_NAME ($GITHUB_SHA) is not on main; skipping release"
+          fi
+
+  build-linux:
+    name: Build (Linux x86_64, clang)
+    needs: guard
+    if: needs.guard.outputs.on_main == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y ninja-build clang
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-linux-clang-${{ hashFiles('cmake/*.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            deps-linux-clang-${{ hashFiles('cmake/*.cmake') }}-
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++
+      - name: Build
+        run: cmake --build build
+      # Asserted in ci.yml too; repeated because this is the binary that reaches
+      # users, and a mod exporting lua_* kills any process where another mod
+      # embeds a different LuaJIT.
+      - name: Assert the module exports only MinaMod_Init
+        run: |
+          so=build/mods/minamodlua/mod.so
+          nm -D --defined-only "$so"
+          if [ "$(nm -D --defined-only "$so" | awk '{print $NF}')" != MinaMod_Init ] || nm -D "$so" | grep -qi lua; then
+            echo "::error::$so exports more than MinaMod_Init - refusing to release"
+            exit 1
+          fi
+      - name: Upload mod drop-ins (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: build/mods/
+          if-no-files-found: error
+
+  build-windows:
+    name: Build (Windows x86_64, MSVC)
+    needs: guard
+    if: needs.guard.outputs.on_main == 'true'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64
+      - name: Cache FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-windows-msvc-${{ hashFiles('cmake/*.cmake') }}-${{ github.run_id }}
+          restore-keys: |
+            deps-windows-msvc-${{ hashFiles('cmake/*.cmake') }}-
+      - name: Configure
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=cl
+          -DCMAKE_CXX_COMPILER=cl
+      - name: Build
+        run: cmake --build build
+      - name: Assert the module exports only MinaMod_Init
+        shell: bash
+        run: |
+          dll=build/mods/minamodlua/mod.dll
+          # `//exports`: MSYS would mangle a lone leading slash into a path.
+          dumpbin //exports "$dll" | tee exports.txt
+          names=$(awk '/ordinal +hint +RVA +name/ {f=1; next}
+                       f && NF == 0 && seen {exit}
+                       f && NF >= 4 {print $NF; seen=1}' exports.txt)
+          if [ "$names" != MinaMod_Init ]; then
+            echo "::error::$dll exports ${names:-<nothing parsed>} - refusing to release"
+            exit 1
+          fi
+      - name: Upload mod drop-ins (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: build/mods/
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      # The game wants each mod as <mods>/<id>/ holding mod.dll (or mod.so)
+      # beside its mod.yc, so the zip must preserve that folder - a user unpacks
+      # it straight into the game's mods directory.
+      - name: Package drop-in zips
+        run: |
+          for plat in linux windows; do
+            ( cd "dist/release-$plat" && zip -qr "$GITHUB_WORKSPACE/minamodlua-${GITHUB_REF_NAME}-${plat}-x86_64.zip" . )
+          done
+          sha256sum minamodlua-*.zip | tee SHA256SUMS.txt
+
+      # Pre-release for any prerelease suffix or a 0.x major. The project is 0.x
+      # and will be for a while.
+      - name: Classify tag
+        id: tag
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          if [[ "$ver" == *-* || "$ver" == 0.* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }} # this job has no checkout; tell gh the repo
+        run: |
+          args=(--title "$GITHUB_REF_NAME" --generate-notes)
+          if [[ "${{ steps.tag.outputs.prerelease }}" == "true" ]]; then args+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" \
+            "minamodlua-${GITHUB_REF_NAME}-linux-x86_64.zip" \
+            "minamodlua-${GITHUB_REF_NAME}-windows-x86_64.zip" \
+            SHA256SUMS.txt \
+            "${args[@]}"
