@@ -1,8 +1,6 @@
 name: release
 
 # Tag push -> build both shipped targets -> attach a drop-in zip per platform.
-# The point of the project is that a Lua modder never needs a C++ toolchain, so
-# the binaries have to exist somewhere they can just download.
 
 on:
   push:
@@ -57,9 +55,7 @@ jobs:
             -DCMAKE_CXX_COMPILER=clang++
       - name: Build
         run: cmake --build build
-      # Asserted in ci.yml too; repeated because this is the binary that reaches
-      # users, and a mod exporting lua_* kills any process where another mod
-      # embeds a different LuaJIT.
+
       - name: Assert the module exports only MinaMod_Init
         run: |
           so=build/mods/minamodlua/mod.so
@@ -132,8 +128,7 @@ jobs:
           path: dist
 
       # The game wants each mod as <mods>/<id>/ holding mod.dll (or mod.so)
-      # beside its mod.yc, so the zip must preserve that folder - a user unpacks
-      # it straight into the game's mods directory.
+      # beside its mod.yc, so the zip must preserve that folder
       - name: Package drop-in zips
         run: |
           for plat in linux windows; do
@@ -141,8 +136,7 @@ jobs:
           done
           sha256sum minamodlua-*.zip | tee SHA256SUMS.txt
 
-      # Pre-release for any prerelease suffix or a 0.x major. The project is 0.x
-      # and will be for a while.
+      # Pre-release for any prerelease suffix or a 0.x major
       - name: Classify tag
         id: tag
         run: |

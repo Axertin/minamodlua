@@ -29,10 +29,8 @@ function(mml_add_mod TARGET)
     add_library(${TARGET} MODULE ${ARG_SOURCES})
     target_link_libraries(${TARGET} PRIVATE minamodlua::minamodapi)
 
-    # The export policy rides on the luajit target because LuaJIT is what would
-    # otherwise leak: luaconf.h marks LUA_API default-visibility per declaration,
-    # so the project-wide `hidden` preset does nothing for it. Measured: 148
-    # exported lua* symbols without the policy, 0 with.
+    # LuaJIT is what would otherwise leak symbols, so the export policy rides on
+    # its target rather than being set here. See cmake/LuaJIT.cmake.
     if(ARG_USES_LUA)
         target_link_libraries(${TARGET} PRIVATE minamodlua::luajit)
     endif()

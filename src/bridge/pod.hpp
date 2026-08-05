@@ -1,12 +1,9 @@
 // pod.hpp - field layout for the MM_ value types.
 //
 // The only hand-written type descriptions in the binding: field count and
-// element type cannot be recovered from C++ without reflection. Each is checked
-// against the real definition, so an upstream layout change fails to compile
-// rather than marshalling garbage.
+// element type cannot be recovered from C++ without reflection.
 //
-// Layout facts that are easy to assume wrongly, all verified against
-// MinaModTypes.h and confirmed in-game by the probe:
+// Layout quirks:
 //   MM_Transform is r, s, t - rotation, scale, translation. Not t/r/s.
 //   MM_AABB is center/extents, not min/max.
 //   MM_Color is four uint8, 0-255. Exposed as 0-255 to match the engine rather
@@ -23,8 +20,7 @@
 namespace mml
 {
 
-// Undefined on purpose: a POD with no descriptor is a compile error naming the
-// exact type, never a silently wrong marshal.
+// Undefined on purpose so that a POD with no descriptor is a compile error naming the exact type
 template <typename T>
 struct PodTraits;
 
@@ -67,9 +63,7 @@ struct PodTraits<MM_Color>
 };
 static_assert( sizeof( MM_Color ) == 4, "MM_Color is not four packed bytes - its layout changed" );
 
-// MM_Rtti and MM_StringRef are deliberately absent: neither survives being
-// flattened into Lua numbers, so marshal.hpp and invoke.hpp handle them ahead of
-// the general POD path. MM_Rtti holds a uint64; MM_StringRef is ptr+len into
-// engine memory and is NOT NUL-terminated.
+// MM_Rtti and MM_StringRef have no descriptor on purpose: neither survives being
+// flattened into numbers, so invoke.hpp encodes them itself.
 
 }  // namespace mml

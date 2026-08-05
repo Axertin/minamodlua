@@ -1,8 +1,4 @@
 // marshal.hpp - moving values across the Lua boundary.
-//
-// One rule shapes everything here: a mistake in a mod's Lua must produce a Lua
-// error, never a crash in the game. Argument checking measured at +0.4ns against
-// a ~22ns boundary crossing, so there is no reason to be sparing with it.
 
 #pragma once
 
@@ -66,12 +62,22 @@ inline uint32_t type_id()
     return id;
 }
 
-// Metatable key. Owns its storage because type_name's view is not NUL-terminated
-// at the right place.
+// Registry key. Prefixed so it cannot collide with a key another embedder puts
+// in the same registry. Owns its storage because type_name's view is not
+// NUL-terminated at the right place.
 template <typename T>
 inline const char* handle_mt_name()
 {
     static const std::string s = "minamodlua." + std::string( type_name<T>() );
+    return s.c_str();
+}
+
+// What a mod sees: plain `ycEntity`, not the registry key. Error messages and
+// tostring read as the engine's own type names.
+template <typename T>
+inline const char* handle_type_name()
+{
+    static const std::string s( type_name<T>() );
     return s.c_str();
 }
 
@@ -89,9 +95,7 @@ inline void ensure_handle_metatable( lua_State* L );
     abort();
 }
 
-// A double carries 53 bits of mantissa. `size_t` and `uint64_t` are the same
-// type on x86-64, so this is the only place a count can be told from a hash - at
-// runtime, by value.
+// The runtime half of Kind::Wide: rejects anything a double cannot hold exactly.
 template <typename T>
 inline T check_wide( lua_State* L, const char* fn, int argn )
 {
@@ -162,23 +166,23 @@ inline T* check_handle( lua_State* L, const char* fn, int argn )
     if ( lua_isnoneornil( L, argn ) ) return nullptr;  // nil is a legitimate "none"
 
     void* raw = lua_touserdata( L, argn );
-    if ( !raw || !lua_getmetatable( L, argn ) ) arg_error( L, fn, argn, handle_mt_name<T>() );
+    if ( !raw || !lua_getmetatable( L, argn ) ) arg_error( L, fn, argn, handle_type_name<T>() );
 
     ensure_handle_metatable<T>( L );
     const bool same = lua_rawequal( L, -1, -2 );
     lua_pop( L, 2 );
-    if ( !same ) arg_error( L, fn, argn, handle_mt_name<T>() );
+    if ( !same ) arg_error( L, fn, argn, handle_type_name<T>() );
 
     const HandleRef ref = *(const HandleRef*)raw;
     T* const p = (T*)handles().resolve( ref, type_id<T>() );
-    if ( !p ) luaL_error( L, "%s: argument #%d is a stale %s; fetch it again", fn, argn, handle_mt_name<T>() );
+    if ( !p ) luaL_error( L, "%s: argument #%d is a stale %s; fetch it again", fn, argn, handle_type_name<T>() );
     return p;
 }
 
 // Holds one parameter across the call. Out-params live here too: the pointer the
 // engine writes through points into this object, and its value is pushed as an
 // extra Lua return afterwards. Without ffi Lua cannot allocate a buffer, so
-// synthesising it on this side is required, not merely convenient.
+// synthesising it on this side is required.
 template <typename T>
 struct Storage
 {
@@ -192,9 +196,8 @@ struct Storage
 
     void read( lua_State* L, const char* fn, int& argn )
     {
-        // MM_Rtti carries a uint64 that no Lua number can hold, so it travels as
-        // its 8 raw bytes in a (binary-safe) Lua string. Checked ahead of the
-        // general POD path, which would try to flatten it into numbers.
+        // Read side of the 8-byte-string encoding in invoke.hpp. Ahead of the
+        // general POD path, which would flatten it into numbers.
         if constexpr ( std::is_same_v<Held, MM_Rtti> )
         {
             size_t len = 0;

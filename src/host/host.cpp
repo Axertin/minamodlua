@@ -1,13 +1,23 @@
-// host.cpp - the mod entry point.
-//
-// One native mod embeds LuaJIT and loads Lua mods from sibling mods/<id>/
-// folders. This is the skeleton: version gate, logging, and the VM. Mod
-// discovery, the per-mod sandbox, and the event dispatch land on top of it.
+// host.cpp - the mod entry point. One native mod embeds LuaJIT and loads Lua
+// mods from sibling mods/<id>/ folders.
 
 #include "MinaModAPI.h"
+#include "events.hpp"
 #include "handle.hpp"
 #include "invoke.hpp"
 #include "log.hpp"
+#include "modloader.hpp"
+
+#include <filesystem>
+
+#if defined( _WIN32 )
+    #ifndef WIN32_LEAN_AND_MEAN
+        #define WIN32_LEAN_AND_MEAN
+    #endif
+    #include <windows.h>
+#else
+    #include <dlfcn.h>
+#endif
 
 extern "C"
 {
@@ -22,13 +32,38 @@ namespace
 
 lua_State* g_L = nullptr;
 
-// On x64 LuaJIT unwinds for real (SEH on Windows, DWARF on Linux) rather than
-// longjmp'ing, so an unprotected Lua error would propagate through the game's
-// C++ frames - where a catch(...) in its frame loop would swallow it and the
-// enclosing pcall would report success. noexcept turns any escape into a loud
-// terminate instead, and every callback the engine invokes must carry it.
+// This module lives at <mods>/minamodlua/mod.{dll,so}, so the mods folder is two
+// levels up. Taken from where this code is actually loaded from rather than
+// rebuilt from %APPDATA%, because the game can be pointed at a different folder
+// and a guess would silently find nothing.
+std::filesystem::path mods_dir()
+{
+#if defined( _WIN32 )
+    HMODULE self = nullptr;
+    if ( !GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                              (LPCSTR)&mods_dir, &self ) )
+        return {};
+
+    char buf[MAX_PATH];
+    const DWORD n = GetModuleFileNameA( self, buf, sizeof buf );
+    if ( n == 0 || n == sizeof buf ) return {};
+    return std::filesystem::path( buf ).parent_path().parent_path();
+#else
+    Dl_info info{};
+    if ( !dladdr( (void*)&mods_dir, &info ) || !info.dli_fname ) return {};
+    return std::filesystem::path( info.dli_fname ).parent_path().parent_path();
+#endif
+}
+
+// Every function the engine calls is noexcept. On x64 LuaJIT unwinds for real
+// (SEH on Windows, DWARF on Linux) rather than longjmp'ing, so an escaping Lua
+// error would unwind through the game's own C++ frames, where a catch(...) in
+// its frame loop swallows it and the enclosing pcall then reports success.
 extern "C" void on_game_shutdown( void* ) noexcept
 {
+    // Hooks come out first: after lua_close a thunk that still fired would be
+    // dispatching into a dead state.
+    mml::events_shutdown();
     mml::handles().invalidate_all();
 
     if ( g_L )
@@ -41,7 +76,7 @@ extern "C" void on_game_shutdown( void* ) noexcept
     mml::log::shutdown();
 }
 
-bool start_lua()
+bool start_lua( uint32_t gameRevision )
 {
     g_L = luaL_newstate();
     if ( !g_L )
@@ -57,13 +92,32 @@ bool start_lua()
     mml::log::write( "%s (%s), JIT %s", LUAJIT_VERSION, lua_tostring( g_L, -1 ), jit ? "on" : "off" );
     lua_pop( g_L, 1 );
 
-    // Deliberately parked under a name mods are not pointed at: the ergonomic
-    // layer sits in front of it, and `raw` is the escape hatch for anything that
-    // layer has not covered yet.
+    // Reaches mods as mina.raw. The ergonomic layer will sit in front of it;
+    // `raw` stays as the escape hatch for whatever that layer has not covered.
     const int bound = mml::open_raw_api( g_L );
-    lua_setglobal( g_L, "__mina_raw" );
-
     mml::log::write( "bound %d of %d MinaModAPI functions", bound, MINAMODLUA_API_COUNT );
+
+    lua_newtable( g_L );
+    lua_insert( g_L, -2 );
+    lua_setfield( g_L, -2, "raw" );
+
+    if ( !mml::events_open( g_L ) )
+    {
+        lua_pop( g_L, 1 );
+        return false;
+    }
+
+    const std::filesystem::path mods = mods_dir();
+    if ( mods.empty() )
+    {
+        mml::log::write( "FATAL: cannot locate the mods folder from this module's own path" );
+        lua_pop( g_L, 1 );
+        return false;
+    }
+
+    // Runs during MinaMod_Init, before most engine systems exist, so mods only
+    // register handlers here - the same shape as Factorio's control stage.
+    mml::load_mods( g_L, mods, gameRevision );
     return true;
 }
 
@@ -77,10 +131,8 @@ extern "C" MM_EXPORT void MinaMod_Init( MinaModAPI* mm ) noexcept
     mml::log::init( mm );
     mml::log::write( "minamodlua %s starting", MINAMODLUA_VERSION );
 
-    // MinaModAPI carries no struct size field, only APIVersion. A future game
-    // build shipping a shorter struct would be read past the end into a garbage
-    // function pointer with nothing to detect it, so a mismatch is refused
-    // outright rather than warned about.
+    // There is no struct size field, only APIVersion, so a shorter struct from a
+    // future build would be read past its end with nothing to detect it.
     if ( (int)mm->APIVersion != (int)MinaModAPI_Version )
     {
         mml::log::write( "FATAL: MinaModAPI version mismatch - game reports %llu, built against %d",
@@ -89,10 +141,10 @@ extern "C" MM_EXPORT void MinaMod_Init( MinaModAPI* mm ) noexcept
         return;
     }
 
-    mml::log::write( "MinaModAPI v%llu, game revision %u", (unsigned long long)mm->APIVersion,
-                     mm->GetGameRevision ? mm->GetGameRevision() : 0u );
+    const uint32_t revision = mm->GetGameRevision ? mm->GetGameRevision() : 0u;
+    mml::log::write( "MinaModAPI v%llu, game revision %u", (unsigned long long)mm->APIVersion, revision );
 
-    if ( !start_lua() ) return;
+    if ( !start_lua( revision ) ) return;
 
     if ( mm->InstallHook ) mm->InstallHook( "GameShutdown", 0, on_game_shutdown );
 

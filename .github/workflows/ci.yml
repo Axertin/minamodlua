@@ -19,8 +19,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # Pinned exactly: clang-format's output drifts between majors, and an
-      # unpinned gate would churn the tree every time the runner image moves.
       - name: Check formatting (clang-format 21.1.8)
         run: |
           python3 -m venv /tmp/cf
@@ -67,13 +65,6 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      # The mod is dlopen'd into the game's process beside every other mod, so a
-      # symbol it exports is one the dynamic linker may bind someone else's call
-      # to. LuaJIT is the live hazard: luaconf.h stamps visibility("default")
-      # onto every LUA_API declaration, so -fvisibility=hidden does nothing and a
-      # static link leaks ~150 lua_* symbols unless cmake/mod-exports.map is
-      # applied. Two mods embedding different LuaJIT builds then interpose and
-      # the process dies.
       - name: Assert the module exports only MinaMod_Init
         run: |
           so=build/mods/minamodlua/mod.so
@@ -83,8 +74,7 @@ jobs:
             exit 1
           fi
 
-      # Clang is the shipped Linux compiler; the GCC lane is a second opinion on
-      # the sources, not a second artifact.
+      # upload the clang build, not the gcc one
       - name: Upload mod drop-in (Linux)
         if: matrix.cc == 'clang'
         uses: actions/upload-artifact@v4
@@ -113,9 +103,6 @@ jobs:
           restore-keys: |
             deps-windows-msvc-${{ hashFiles('cmake/*.cmake') }}-
 
-      # MSVC is the shipped Windows toolchain: the game is MSVC-ABI and this SDK
-      # returns small structs by value, which is exactly where the MSVC and GNU
-      # ABIs disagree.
       - name: Configure
         run: >
           cmake -B build -G Ninja
@@ -126,9 +113,6 @@ jobs:
       - name: Build
         run: cmake --build build
 
-      # Same invariant as the Linux lane. On PE it comes from
-      # __declspec(dllexport) plus the link options in cmake/LuaJIT.cmake, so it
-      # is a different mechanism failing the same way.
       - name: Assert the module exports only MinaMod_Init
         shell: bash
         run: |
@@ -152,11 +136,6 @@ jobs:
           if-no-files-found: error
 
   build-mingw:
-    # Compile-check only, never shipped: mingw-w64 produces a GNU-ABI binary and
-    # the game is MSVC-ABI. It earns its place by catching Windows #ifdef rot
-    # from a Linux runner, by keeping cmake/toolchain-mingw64.cmake from
-    # bit-rotting, and because it is the only PE export check that can run
-    # without a Windows machine.
     name: Compile-check (mingw-w64 cross, not shipped)
     needs: format
     runs-on: ubuntu-24.04

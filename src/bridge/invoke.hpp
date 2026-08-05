@@ -3,8 +3,7 @@
 //     template<auto PM> int wrap(lua_State*)
 //
 // The compiler deduces R and A... from &MinaModAPI::Whatever and this expands
-// the marshalling for each, so a signature no rule covers is a compile error
-// naming the exact member.
+// the marshalling for each
 
 #pragma once
 
@@ -26,7 +25,7 @@ inline void ensure_handle_metatable( lua_State* L )
 {
     if ( luaL_newmetatable( L, handle_mt_name<T>() ) )
     {
-        lua_pushstring( L, handle_mt_name<T>() );
+        lua_pushstring( L, handle_type_name<T>() );
         lua_setfield( L, -2, "__name" );
 
         lua_pushcfunction( L, handle_eq );

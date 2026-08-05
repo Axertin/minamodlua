@@ -9,8 +9,12 @@ mml_add_mod(minamodlua
     ID minamodlua
     NAME "minamodlua"
     SOURCES
+        events.cpp
         host.cpp
-        log.cpp)
+        log.cpp
+        modinfo.cpp
+        modloader.cpp
+        sandbox.cpp)
 
 target_include_directories(minamodlua PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(minamodlua PRIVATE mml_bridge)

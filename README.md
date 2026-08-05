@@ -1,19 +1,12 @@
 # minamodlua
 
-Lua bindings for [MinaModAPI](https://github.com/YachtClubGames/MinaModAPI), so *Mina the Hollower*
-mods can be written in Lua instead of C++.
-
-> **Status: early.** The host loads, embeds LuaJIT and binds 351 of the 372 MinaModAPI functions,
-> but it does not discover or run Lua mods yet.
+Lua bindings for [MinaModAPI](https://github.com/YachtClubGames/MinaModAPI), so *Mina the Hollower* mods can be written in Lua as well as C/C++.
 
 ## Why
 
-The game's modding SDK is C: 372 function pointers in one struct, handed to a mod at load time. That
-is a fine interface if you write C++ and own a toolchain. This project puts LuaJIT in front of it so
-that people who know Lua can write mods without compiling anything.
+The game's modding SDK is C, and hands a mod a big function table at load time. This project puts LuaJIT in front of it so that people who know Lua can write mods directly against this API.
 
-[Factorio](https://lua-api.factorio.com/) is the model for conventions: per-mod environments, a
-`defines` namespace, `remote` interfaces between mods, and a declarative settings system.
+[Factorio](https://lua-api.factorio.com/) is referenced heavily for structure and conventions.
 
 ## Requirements
 
@@ -31,14 +24,9 @@ cmake --build build
 ```
 
 Mods land in `build/mods/<id>/` as `mod.so` (Linux) or `mod.dll` (Windows) beside a generated
-`mod.yc`. `cmake --build build --target deploy` copies them into the host's own game mods folder;
-launch the game with `-mod -mod-allow-code`.
+`mod.yc`. `cmake --build build --target deploy` copies them into the host's own game mods folder; launch the game with `-mod -mod-allow-code`.
 
-The mod exports exactly one symbol, `MinaMod_Init`. That is enforced by the link line, because
-another loaded mod may embed its own LuaJIT and interposing two VMs crashes immediately.
-
-On Windows, run that from a Visual Studio developer prompt — LuaJIT builds via its own
-`msvcbuild.bat`, which needs `cl` and the Windows SDK on `PATH`.
+On Windows, run that from a Visual Studio developer prompt (LuaJIT builds via its own `msvcbuild.bat`, which needs `cl` and the Windows SDK on `PATH`).
 
 ### Cross-compiling for Windows from Linux
 
@@ -50,30 +38,17 @@ cmake -B build-win -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-mingw64.cmake -DCMAKE_
 cmake --build build-win
 ```
 
-The result is self-contained — it imports only `KERNEL32.dll` and `msvcrt.dll`, so there are no
-runtime DLLs to ship beside it. Copy `build-win/mods/<id>/` into
-`%APPDATA%\Yacht Club Games\Mina the Hollower\mods\` by hand; the `deploy` target only knows the
-host's own mods folder.
-
 ## Design
 
-- **LuaJIT**, bound through the Lua C API rather than the FFI. The SDK headers
-  only compile as C++, the FFI cannot detect misdeclarations, and argument type-checking costs
-  essentially nothing.
-- **Bindings are deduced, not parsed.** A generator extracts only the 372 member *names*; C++
-  pointer-to-data-member and parameter-pack deduction do all type handling. 351 bind with no
-  per-function code; the remaining 21 (variadics, callback parameters, raw `void*`) get hand-written
-  wrappers. Anything unhandled is a compile error rather than a silent gap.
-- **Mod bugs must not crash the game.** Every argument is checked, every call into Lua is protected
-  so an error can never unwind into engine frames, and engine handles carry a generation stamp so a
-  stale reference is a Lua error rather than a use-after-free.
-- **Lua mods are ordinary mods**: `mods/<id>/` with `mod.yc` + `main.lua` and no binary.
+- **LuaJIT**, bound through the Lua C API rather than the FFI. The SDK headers only compile as C++, the FFI cannot detect misdeclarations, and argument type-checking costs essentially nothing.
+- **Bindings are deduced, not parsed.** A generator extracts only the member *names*; C++ pointer-to-data-member and parameter-pack deduction do all type handling. Anything unhandled is a compile error.
+- **Mod bugs must not crash the game.** Every argument is checked, every call into Lua is protected so an error can never unwind into engine frames.
+- **Lua mods are ordinary mods**: `mods/<id>/` with `mod.yc` + `main.lua` and no binary. This means that in theory, the game's own resource replacement will work just fine.
 
 ## Contributing
 
-The Lua-facing ergonomics are deliberately written in **pure Lua**, are the part most worth outside help, and need
-neither the game nor a C++ toolchain. See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+[MIT](LICENSE)
