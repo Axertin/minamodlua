@@ -22,10 +22,10 @@ void init( MinaModAPI* mm )
     // Beside the game's own mod.log, which is where a mod author already looks.
 #if defined( _WIN32 )
     const char* base = getenv( "APPDATA" );
-    const char* tail = "/Yacht Club Games/Mina the Hollower/minamodlua.log";
+    const char* tail = "/Yacht Club Games/Mina the Hollower/luamods.log";
 #else
     const char* base = getenv( "HOME" );
-    const char* tail = "/.local/share/Yacht Club Games/Mina the Hollower/minamodlua.log";
+    const char* tail = "/.local/share/Yacht Club Games/Mina the Hollower/luamods.log";
 #endif
     if ( !base ) return;
 
