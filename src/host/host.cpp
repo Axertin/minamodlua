@@ -32,6 +32,27 @@ namespace
 
 lua_State* g_L = nullptr;
 
+// Observed at revision 149150: priority runs *higher-number-first* (a handler
+// registered at 100 fires before one at -100), and same-priority handlers on
+// the same hook run in installation order. Mods load during MinaMod_Init,
+// after this file's own InstallHook("GameShutdown", ...) call below, so at
+// priority 0 the host's own teardown thunk would always install - and thus
+// run - before any mod's game_shutdown handler. on_game_shutdown tears Lua
+// down first (events_shutdown, then lua_close) precisely so no thunk fires
+// into a dead state; that ordering only works if the host genuinely runs
+// last. Hence a reserved floor, strongly negative so it sorts after every
+// ordinary mod priority (int32_t default 0, and even a mod deliberately
+// picking a very negative priority is unlikely to undercut this).
+//
+// Not INT32_MIN itself: that is the type's edge value, and edge values are a
+// magnet for off-by-one bugs (a future comparison written as `<=` instead of
+// `<`, a negation, an accidental increment) that INT32_MIN cannot absorb
+// without wrapping. Leaving headroom below it costs nothing and avoids that
+// entire class of mistake. A mod that registers game_shutdown at a priority
+// at or below this floor would still lose the race - documented in
+// docs/events.md alongside the rest of the priority-ordering discussion.
+constexpr int32_t kTeardownPriorityFloor = -1000000;
+
 // Where this module was actually loaded from, rather than a path rebuilt from
 // %APPDATA%: the game can be pointed at a different folder, and a guess would
 // silently find nothing. The layout is <mods>/minamodlua/mod.{dll,so}, so the
@@ -150,7 +171,7 @@ extern "C" MM_EXPORT void MinaMod_Init( MinaModAPI* mm ) noexcept
 
     if ( !start_lua( revision ) ) return;
 
-    if ( mm->InstallHook ) mm->InstallHook( "GameShutdown", 0, on_game_shutdown );
+    if ( mm->InstallHook ) mm->InstallHook( "GameShutdown", kTeardownPriorityFloor, on_game_shutdown );
 
     mml::log::write( "ready" );
 }

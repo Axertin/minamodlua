@@ -236,7 +236,10 @@ int load_mods( lua_State* L, const fs::path& modsDir, uint32_t gameRevision )
         if ( run_file( L, mod, "main.lua", true ) )
         {
             ++loaded;
-            log::write( "loaded %s (%s)", mod.id.c_str(), mod.name.c_str() );
+            // modVersion comes from the manifest, so it identifies a release
+            // rather than a build: it does not change when main.lua is edited,
+            // and will not by itself reveal a stale copy in the game's folder.
+            log::write( "loaded %s v%u (%s)", mod.id.c_str(), mod.modVersion, mod.name.c_str() );
         }
         else
         {

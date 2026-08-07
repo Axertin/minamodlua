@@ -5,14 +5,24 @@ include_guard(GLOBAL)
 # is still registered.
 #
 # 0 for min/maxGameVersion means no version constraint.
+#
+# VERSION is the mod's own release number, defaulting to 1. The host logs it at
+# load and the game exposes it to other mods as GetModVersion(id), so bump it
+# when you ship a change. It identifies a release, not a build - editing a mod's
+# Lua without bumping it leaves the reported version unchanged.
 function(mml_write_mod_manifest DIR ID NAME)
+    cmake_parse_arguments(ARG "" "VERSION" "" ${ARGN})
+    if(NOT ARG_VERSION)
+        set(ARG_VERSION 1)
+    endif()
+
     file(WRITE "${DIR}/mod.yc"
 "[YCD Version: 1]
 MinaModDef
 {
 \tid: \"${ID}\",
 \tname: \"${NAME}\",
-\tmodVersion: 1,
+\tmodVersion: ${ARG_VERSION},
 \tminGameVersion: 0,
 \tmaxGameVersion: 0,
 \tloadPriority: 0,
