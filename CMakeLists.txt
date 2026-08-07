@@ -40,6 +40,10 @@ option(MML_SANITIZE "Build the host-side event tests with -fsanitize=address,und
 
 add_subdirectory(src/bridge)
 add_subdirectory(src/host)
+# A Lua-only mod (no binary), so it has no meaning to cross-compilation the
+# way tests/tools do - but it needs no compiler at all, so unlike those it
+# isn't gated behind CMAKE_CROSSCOMPILING.
+add_subdirectory(examples/smoketest)
 # Both the tests and the apidoc generator are host-side executables, so neither
 # has any meaning when cross-compiling: the mingw lane would produce Windows
 # .exes the build machine cannot run.
@@ -60,4 +64,4 @@ file(TO_CMAKE_PATH "${MML_DEPLOY_DIR}" MML_DEPLOY_DIR)
 add_custom_target(deploy
     COMMAND ${CMAKE_COMMAND} -E copy_directory "${MML_MODS_DIR}" "${MML_DEPLOY_DIR}"
     COMMENT "Deploying mods to ${MML_DEPLOY_DIR}")
-add_dependencies(deploy minamodlua)
+add_dependencies(deploy minamodlua mml-smoketest)
