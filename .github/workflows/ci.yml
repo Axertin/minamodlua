@@ -95,6 +95,21 @@ jobs:
       - name: Build
         run: cmake --build build
 
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # Second, dedicated build directory: MML_SANITIZE only instruments
+      # mml_events_test and the OBJECT libraries it links, and this directory
+      # never builds or ships minamodlua itself. One leg only - ASan/UBSan
+      # findings do not depend on which compiler produced the bug.
+      - name: Sanitizer build (ASan+UBSan, event tests only)
+        if: matrix.cc == 'clang'
+        run: |
+          cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMML_SANITIZE=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build-asan --target mml_events_test
+          ctest --test-dir build-asan --output-on-failure
+
       - name: Assert the module exports only MinaMod_Init
         run: |
           so=build/mods/minamodlua/mod.so
@@ -154,6 +169,13 @@ jobs:
 
       - name: Build
         run: cmake --build build
+
+      # MSVC is the only toolchain in CI that could disagree with the others
+      # about struct layout and offsetof - which is what every event descriptor
+      # row is - and the only one that takes the __FUNCSIG__ branch of
+      # type_name, i.e. the string behind every handle metatable's name.
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
       - name: Assert the module exports only MinaMod_Init
         shell: bash

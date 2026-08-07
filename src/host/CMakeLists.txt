@@ -1,3 +1,12 @@
+# The context marshalling is split out so tests can link it without the game:
+# it is the one part of the event path that can be exercised on a bare
+# lua_State, and it writes into engine memory from a table of offsets.
+add_library(mml_events OBJECT
+    eventctx.cpp
+    eventdefs.cpp)
+target_include_directories(mml_events PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(mml_events PUBLIC mml_bridge)
+
 # The shipped mod: embeds LuaJIT, exposes the bound API, and will load Lua mods
 # from sibling mods/<id>/ folders.
 #
@@ -17,7 +26,7 @@ mml_add_mod(minamodlua
     sandbox.cpp)
 
 target_include_directories(minamodlua PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(minamodlua PRIVATE mml_bridge)
+target_link_libraries(minamodlua PRIVATE mml_bridge mml_events)
 target_compile_definitions(minamodlua PRIVATE MINAMODLUA_VERSION="${PROJECT_VERSION}")
 
 # The ergonomic Lua layer ships as files beside the binary, so changing it needs

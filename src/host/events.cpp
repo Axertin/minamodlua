@@ -1,9 +1,13 @@
 #include "events.hpp"
 
+#include "eventctx.hpp"
+#include "eventdefs.hpp"
 #include "handle.hpp"
 #include "invoke.hpp"
 #include "log.hpp"
 #include "marshal.hpp"
+
+#include <MinaModHooks.h>
 
 #include <string.h>
 
@@ -24,57 +28,7 @@ namespace mml
 namespace
 {
 
-// Hook context layouts.
-struct FixedUpdateCtx
-{
-    float elapsed;
-};
-struct GameStateTransitionCtx
-{
-    int32_t* pGameState;
-};
-struct WorldCtx
-{
-    World* world;
-};
-struct WorldUpdateCtx
-{
-    World* world;
-    float elapsed;
-};
-
-enum class Shape
-{
-    None,          // GameInit, GameShutdown - ctx is NULL, confirmed in-game
-    Elapsed,       // FixedUpdate
-    World,         // WorldConstruct, WorldDestroy
-    WorldElapsed,  // WorldUpdate, WorldUpdateEnd
-    GameState,     // GameStateTransition - the one mutable context
-};
-
-struct EventDef
-{
-    const char* luaName;
-    const char* hookName;
-    Shape shape;
-    bool playerWorldOnly;
-};
-
-// Two Lua names map to WorldUpdate. The filtered one is the default
-const EventDef kEvents[] = {
-    { "fixed_update", "FixedUpdate", Shape::Elapsed, false },
-    { "game_state_transition", "GameStateTransition", Shape::GameState, false },
-    { "game_init", "GameInit", Shape::None, false },
-    { "game_shutdown", "GameShutdown", Shape::None, false },
-    { "world_construct", "WorldConstruct", Shape::World, false },
-    { "world_destroy", "WorldDestroy", Shape::World, false },
-    { "world_update", "WorldUpdate", Shape::WorldElapsed, true },
-    { "world_update_any", "WorldUpdate", Shape::WorldElapsed, false },
-    { "world_update_end", "WorldUpdateEnd", Shape::WorldElapsed, true },
-    { "world_update_end_any", "WorldUpdateEnd", Shape::WorldElapsed, false },
-};
-
-constexpr int kPoolSize = 64;
+constexpr int kPoolSize = 128;
 
 struct Slot
 {
@@ -94,6 +48,14 @@ const char* const kHandlersKey = "minamodlua.handlers";
 // debug.traceback is not cheap. Report the first few in full, then go quiet.
 constexpr int kMaxReports = 3;
 int g_reports[kPoolSize] = {};
+
+// "This event is not cancellable" is a fact about the mod's code, not a
+// recurring failure: it is worth saying once and never again. It gets its own
+// per-slot latch rather than sharing g_reports, which is the budget for real
+// handler errors - sharing it meant a mod setting mod_handled on fixed_update
+// exhausted that budget in three frames and every genuine error after that
+// vanished with no "further errors will not be reported" notice to explain why.
+bool g_warnedNotCancellable[kPoolSize] = {};
 
 void dispatch( int slot, void* ctx ) noexcept;
 
@@ -116,71 +78,6 @@ constexpr std::array<Thunk, sizeof...( I )> make_thunks( std::index_sequence<I..
 
 const std::array<Thunk, kPoolSize> kThunks = make_thunks( std::make_index_sequence<kPoolSize>{} );
 
-bool plausible_elapsed( float e ) { return e > 0.0f && e < 1.0f; }
-
-// Builds the event table for a handler and leaves it on the stack. Returns
-// false if the context failed its sanity check, in which case nothing is pushed.
-bool push_event( lua_State* L, const Slot& s, void* ctx, World** outWorld )
-{
-    *outWorld = nullptr;
-
-    switch ( s.def->shape )
-    {
-    case Shape::None:
-        lua_newtable( L );
-        return true;
-
-    case Shape::Elapsed:
-    {
-        if ( !ctx ) return false;
-        const auto* c = (const FixedUpdateCtx*)ctx;
-        if ( !plausible_elapsed( c->elapsed ) ) return false;
-        lua_newtable( L );
-        lua_pushnumber( L, c->elapsed );
-        lua_setfield( L, -2, "elapsed" );
-        return true;
-    }
-
-    case Shape::World:
-    {
-        if ( !ctx ) return false;
-        const auto* c = (const WorldCtx*)ctx;
-        *outWorld = c->world;
-        lua_newtable( L );
-        push_handle<World>( L, c->world );
-        lua_setfield( L, -2, "world" );
-        return true;
-    }
-
-    case Shape::WorldElapsed:
-    {
-        if ( !ctx ) return false;
-        const auto* c = (const WorldUpdateCtx*)ctx;
-        if ( !plausible_elapsed( c->elapsed ) ) return false;
-        if ( ( (uintptr_t)c->world % sizeof( void* ) ) != 0 ) return false;
-        *outWorld = c->world;
-        lua_newtable( L );
-        push_handle<World>( L, c->world );
-        lua_setfield( L, -2, "world" );
-        lua_pushnumber( L, c->elapsed );
-        lua_setfield( L, -2, "elapsed" );
-        return true;
-    }
-
-    case Shape::GameState:
-    {
-        if ( !ctx ) return false;
-        const auto* c = (const GameStateTransitionCtx*)ctx;
-        if ( !c->pGameState ) return false;
-        lua_newtable( L );
-        lua_pushinteger( L, *c->pGameState );
-        lua_setfield( L, -2, "new_state" );
-        return true;
-    }
-    }
-    return false;
-}
-
 struct DispatchCtx
 {
     int slot;
@@ -193,11 +90,11 @@ int protected_dispatch( lua_State* L )
     const Slot& s = g_slots[d->slot];
 
     World* world = nullptr;
-    if ( !push_event( L, s, d->ctx, &world ) )
+    if ( !push_event( L, *s.def, d->ctx, &world ) )
     {
         g_slots[d->slot].disabled = true;
-        log::write( "%s context failed its layout check - disabling this event. The SDK does not "
-                    "declare these structs, so a game update can change them silently.",
+        log::write( "%s context failed its layout check - disabling this event. Upstream declares "
+                    "these structs now, but the game build is what actually has to match.",
                     s.def->luaName );
         return 0;
     }
@@ -218,6 +115,23 @@ int protected_dispatch( lua_State* L )
     // Length is read once, so a handler registering another during dispatch does
     // not have it run this tick, and one unregistering leaves a nil we skip.
     const int count = (int)lua_objlen( L, -1 );
+
+    // The sticky-mod_handled rule (see latch_handled, eventctx.hpp) is shared
+    // with tests/events_test.cpp's dispatch_chain, so it is defined once.
+    bool handled = false;
+
+    // Seed from whatever push_event already placed in the table - i.e. from
+    // ctx's modHandled at entry - rather than unconditionally from false.
+    // Slots are keyed on (hookName, priority), so handlers registered at
+    // different priorities are separate hook installations and separate
+    // protected_dispatch calls. Whether the engine walks that priority chain
+    // reusing one ctx pointer cannot be confirmed from the headers alone, but
+    // if it does, an unseeded `handled` would let a later-priority slot's
+    // empty handler list - or its first handler clearing the field - silently
+    // overwrite an earlier-priority claim. Seeding costs nothing when it
+    // doesn't apply: push_event never sets modHandled true out of nothing.
+    if ( s.def->cancellable ) latch_handled( L, eventIndex, handled );
+
     for ( int i = 1; i <= count; ++i )
     {
         lua_rawgeti( L, -1, i );
@@ -249,16 +163,24 @@ int protected_dispatch( lua_State* L )
             }
             lua_pop( L, 1 );
         }
+
+        if ( s.def->cancellable ) latch_handled( L, eventIndex, handled );
     }
 
-    // GameStateTransition is the only mutable context: a handler may assign
-    // e.new_state, and the engine reads it back after we return.
-    if ( s.def->shape == Shape::GameState )
+    // Setting mod_handled on an event whose context has no such field would
+    // otherwise fail silently, which is an afternoon lost to a typo.
+    if ( !s.def->cancellable )
     {
-        lua_getfield( L, eventIndex, "new_state" );
-        if ( lua_isnumber( L, -1 ) ) *( (GameStateTransitionCtx*)d->ctx )->pGameState = (int32_t)lua_tointeger( L, -1 );
+        lua_getfield( L, eventIndex, "mod_handled" );
+        if ( lua_toboolean( L, -1 ) && !g_warnedNotCancellable[d->slot] )
+        {
+            log::write( "%s is not cancellable - setting e.mod_handled on it does nothing", s.def->luaName );
+            g_warnedNotCancellable[d->slot] = true;
+        }
         lua_pop( L, 1 );
     }
+
+    read_back( L, eventIndex, *s.def, d->ctx );
 
     lua_pop( L, 3 );
     return 0;
@@ -285,8 +207,14 @@ void dispatch( int slot, void* ctx ) noexcept
 
 int find_or_install( const EventDef* def, int32_t priority, std::string& error )
 {
+    // strcmp, not pointer equality: two Lua names sharing one hook installation
+    // (world_update / world_update_any) is documented behaviour, and it holds by
+    // pointer only where the compiler pools the two identical "WorldUpdate"
+    // literals. MSVC without /GF - i.e. a Debug build - does not pool them.
     for ( int i = 0; i < kPoolSize; ++i )
-        if ( g_slots[i].used && g_slots[i].def->hookName == def->hookName && g_slots[i].priority == priority ) return i;
+        if ( g_slots[i].used && strcmp( g_slots[i].def->hookName, def->hookName ) == 0 &&
+             g_slots[i].priority == priority )
+            return i;
 
     for ( int i = 0; i < kPoolSize; ++i )
     {
@@ -314,16 +242,16 @@ int l_on_event( lua_State* L )
     const int32_t priority = (int32_t)luaL_optinteger( L, 3, 0 );
 
     const EventDef* def = nullptr;
-    for ( const EventDef& e : kEvents )
-        if ( strcmp( e.luaName, name ) == 0 ) def = &e;
+    for ( size_t i = 0; i < kEventCount; ++i )
+        if ( strcmp( kEvents[i].luaName, name ) == 0 ) def = &kEvents[i];
 
     if ( !def )
     {
         std::string known;
-        for ( const EventDef& e : kEvents )
+        for ( size_t i = 0; i < kEventCount; ++i )
         {
             if ( !known.empty() ) known += ", ";
-            known += e.luaName;
+            known += kEvents[i].luaName;
         }
         return luaL_error( L, "on_event: no event named '%s'. Known events: %s", name, known.c_str() );
     }
@@ -373,6 +301,16 @@ bool events_open( lua_State* L )
         return false;
     }
 
+    // YC_TOUCH_COUNT sizes ycMouseUpdateCtx::mouseDown and appears in no header
+    // we receive. GetEnum* takes the full macro name and returns -1 on a miss
+    // (0xFFFFFFFF unsigned), which the range check rejects; the probe found that
+    // the YC_INPUT_MOUSE_* aliases do not resolve either, so a miss is expected
+    // rather than exceptional. Absent beats a guessed bound: mouseDown could be
+    // 3 or 7 elements and writing past it corrupts live input state every frame.
+    const uint32_t touch = g_api && g_api->GetEnumUInt ? g_api->GetEnumUInt( "YC_TOUCH_COUNT" ) : 0;
+    events_set_touch_count( ( touch >= 1 && touch <= 64 ) ? touch : 0 );
+    if ( !events_touch_count() ) log::write( "YC_TOUCH_COUNT did not resolve; mouse_update will not expose e.touch" );
+
     lua_newtable( L );
     lua_setfield( L, LUA_REGISTRYINDEX, kHandlersKey );
 
@@ -383,10 +321,16 @@ bool events_open( lua_State* L )
 
 void events_shutdown()
 {
-    for ( Slot& s : g_slots )
+    for ( int i = 0; i < kPoolSize; ++i )
     {
+        Slot& s = g_slots[i];
         if ( s.used && s.handle && g_api && g_api->RemoveHook ) g_api->RemoveHook( s.handle );
         s = Slot{};
+        // Both rate limits are per slot, and slots are handed out afresh on the
+        // next events_open: leaving these set would give a re-initialised host a
+        // slot whose error budget was already spent by whoever held it before.
+        g_reports[i] = 0;
+        g_warnedNotCancellable[i] = false;
     }
     g_L = nullptr;
 }

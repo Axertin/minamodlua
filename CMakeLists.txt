@@ -32,11 +32,20 @@ include(GenApiList)
 # Every mod lands in its own folder here, matching the layout the game expects.
 set(MML_MODS_DIR "${CMAKE_BINARY_DIR}/mods")
 
+# Off by default: a normal build never links anything - least of all the
+# shipped module - against sanitizer runtimes. CI's sanitizer step configures
+# a dedicated second build directory with this ON and builds only
+# mml_events_test, rather than turning it on here.
+option(MML_SANITIZE "Build the host-side event tests with -fsanitize=address,undefined" OFF)
+
 add_subdirectory(src/bridge)
 add_subdirectory(src/host)
-# Builds a host-side tool, so it has no meaning when cross-compiling: the mingw
-# lane would produce a Windows .exe the build machine cannot run.
+# Both the tests and the apidoc generator are host-side executables, so neither
+# has any meaning when cross-compiling: the mingw lane would produce Windows
+# .exes the build machine cannot run.
 if(NOT CMAKE_CROSSCOMPILING)
+    enable_testing()
+    add_subdirectory(tests)
     add_subdirectory(tools/apidoc)
 endif()
 
