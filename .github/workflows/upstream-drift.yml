@@ -70,7 +70,7 @@ jobs:
             echo "drifted=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # The three headers ARE the API; everything else upstream is context and
+      # The four headers ARE the API; everything else upstream is context and
       # gets a --stat line.
       - name: Build the issue body
         if: steps.cmp.outputs.drifted == 'true'
@@ -79,7 +79,7 @@ jobs:
           PIN_SHA: ${{ steps.cmp.outputs.pin_sha }}
           HEAD_SHA: ${{ steps.cmp.outputs.head_sha }}
         run: |
-          headers=(MinaModAPI.h MinaModTypes.h MinaModEnums.h)
+          headers=(MinaModAPI.h MinaModTypes.h MinaModEnums.h MinaModHooks.h)
           body="$GITHUB_WORKSPACE/drift-body.md"
 
           {

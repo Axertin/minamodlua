@@ -75,13 +75,21 @@ enum class Kind
     // valid in return position. The wrapper pushes a copy and Frees the
     // original, so the obligation never reaches Lua.
     OwnedCString,
-    Pod,       // small POD by value (MM_Vec3, MM_Rtti, ...)
-    PodIn,     // const POD* - an input the mod supplies
-    PodOut,    // non-const POD* - an out-param, returned as an extra value
-    Handle,    // opaque engine pointer - userdata
-    Callback,  // function pointer - needs a trampoline, always hand-written
-    Opaque,    // void* - context-dependent, hand-written
+    Pod,         // small POD by value (MM_Vec3, MM_Rtti, ...)
+    PodIn,       // const POD* - an input the mod supplies
+    PodOut,      // non-const POD* - an out-param, returned as an extra value
+    Handle,      // opaque engine pointer - userdata
+    Callback,    // function pointer - needs a trampoline, always hand-written
+    Opaque,      // void* - context-dependent, hand-written
+    ByteBuffer,  // char/uint8_t buffer whose length is a separate parameter
 };
+
+// The three character types, which C uses for "raw bytes" as well as for text.
+// Kept distinct from `sizeof(T) == 1` on purpose: bool is also one byte and is a
+// legitimate out-parameter all over this API.
+template <typename T>
+inline constexpr bool is_char_like_v =
+    std::is_same_v<T, char> || std::is_same_v<T, signed char> || std::is_same_v<T, unsigned char>;
 
 template <typename T>
 struct classify
@@ -113,12 +121,19 @@ struct classify<T*>
                                   // pointer as a number. Only EntityGetChildren has this shape.
                                   : std::is_pointer_v<std::remove_const_t<T>> ? Kind::Unsupported
                                   : !is_complete_v<T>                         ? Kind::Handle
-                                  // `const uint8_t*` is a byte buffer whose length is a separate parameter
-                                  // (PaletteWrite and friends); flattening it would read one byte and stop.
-                                  // Non-const scalar pointers are genuine out-params - PlayerGetPos takes
-                                  // two float* - and stay generic.
+                                  // `const uint8_t*` is a byte buffer whose length is a separate
+                                  // parameter (Base64Encode's src, wfLZ_Decompress's in);
+                                  // flattening it would read one byte and stop. Note the arm below
+                                  // excludes class types, so this is about scalar pointers only -
+                                  // a `const MM_Color*` (PaletteWrite) is PodIn and never reaches
+                                  // here. Non-const char-family pointers are the same shape in the
+                                  // other direction - Base64Decode's dst is a buffer the engine
+                                  // fills, not a single out-value.
                                   : ( std::is_const_v<T> && !std::is_class_v<std::remove_const_t<T>> )
-                                      ? Kind::Unsupported
+                                      ? Kind::ByteBuffer
+                                  : is_char_like_v<std::remove_const_t<T>> ? Kind::ByteBuffer
+                                  // Non-const scalar pointers are genuine out-params - PlayerGetPos
+                                  // takes two float* - and stay generic.
                                   : std::is_const_v<T> ? Kind::PodIn
                                                        : Kind::PodOut;
 };
@@ -166,13 +181,14 @@ using member_type_t = typename member_type<T>::type;
 // tools can report *why* a member needs a hand-written wrapper.
 struct SigInfo
 {
-    bool variadic = false;      // printf-style: Log, Assert
-    bool has_callback = false;  // needs a trampoline
-    bool has_wide = false;      // 64-bit crosses the boundary
-    bool has_out = false;       // out-params become extra returns
-    bool has_opaque = false;    // raw void*, in either direction
-    bool owns_string = false;   // returns char*: wrapper copies and Frees it
-    bool supported = false;     // fully handled by the generic path
+    bool variadic = false;         // printf-style: Log, Assert
+    bool has_callback = false;     // needs a trampoline
+    bool has_wide = false;         // 64-bit crosses the boundary
+    bool has_out = false;          // out-params become extra returns
+    bool has_opaque = false;       // raw void*, in either direction
+    bool has_byte_buffer = false;  // caller-provided buffer; length is a separate parameter
+    bool owns_string = false;      // returns char*: wrapper copies and Frees it
+    bool supported = false;        // fully handled by the generic path
 };
 
 // Undefined primary: anything that is not a function pointer is a compile error.
@@ -191,11 +207,12 @@ struct signature<R ( * )( A... )>
         // A PodOut return is a bare `char*` (owned string), a void* return is
         // Alloc, and neither has a generic meaning worth inventing.
         bool ok = ( ret != Kind::Unsupported ) && ( ret != Kind::PodOut ) && ( ret != Kind::Callback ) &&
-                  ( ret != Kind::Opaque );
+                  ( ret != Kind::Opaque ) && ( ret != Kind::ByteBuffer );
         if ( ret == Kind::Wide ) s.has_wide = true;
         // Alloc and WeakPtrGet are refused for their void* *return*; without
         // this they report "no generic mapping" instead of the real reason.
         if ( ret == Kind::Opaque ) s.has_opaque = true;
+        if ( ret == Kind::ByteBuffer ) s.has_byte_buffer = true;
         if ( ret == Kind::OwnedCString ) s.owns_string = true;
 
         for ( size_t i = 1; i < sizeof( args ) / sizeof( args[0] ); ++i )
@@ -205,7 +222,9 @@ struct signature<R ( * )( A... )>
             s.has_opaque = s.has_opaque || a == Kind::Opaque;
             s.has_out = s.has_out || a == Kind::PodOut;
             s.has_wide = s.has_wide || a == Kind::Wide;  // guarded at runtime, not refused
-            if ( a == Kind::Unsupported || a == Kind::Callback || a == Kind::Opaque ) ok = false;
+            s.has_byte_buffer = s.has_byte_buffer || a == Kind::ByteBuffer;
+            if ( a == Kind::Unsupported || a == Kind::Callback || a == Kind::Opaque || a == Kind::ByteBuffer )
+                ok = false;
         }
 
         s.supported = ok;
