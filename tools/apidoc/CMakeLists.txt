@@ -1,4 +1,4 @@
-# Writes docs/api-reference.md into the source tree, so it is deliberately not
+# Writes docs/raw-api-reference.md into the source tree, so it is deliberately not
 # part of ALL: a plain build never dirties a tracked file.
 mml_generate_api_comments(
     "${MINAMODAPI_SOURCE_DIR}/MinaModAPI.h"
@@ -12,6 +12,6 @@ target_include_directories(mml_apidoc PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}")     # api_comments.inc
 
 add_custom_target(apidoc
-    COMMAND mml_apidoc "${CMAKE_SOURCE_DIR}/docs/api-reference.md"
+    COMMAND mml_apidoc "${CMAKE_SOURCE_DIR}/docs/raw-api-reference.md"
     DEPENDS mml_apidoc
-    COMMENT "Regenerating docs/api-reference.md")
+    COMMENT "Regenerating docs/raw-api-reference.md")

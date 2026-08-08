@@ -1,4 +1,4 @@
-// Writes docs/api-reference.md: what every SDK function looks like from Lua.
+// Writes docs/raw-api-reference.md: what every SDK function looks like from Lua.
 //
 // Built from the same classification the wrappers use, so a signature here
 // cannot disagree with what the binding accepts. Prose comes from upstream's own

@@ -68,7 +68,7 @@ Load is early. `main.lua` runs while the game is still assembling itself, so mos
 
 Each mod gets its own environment, so a mod that reassigns `string.format` breaks only itself, and two mods can use the same global name without colliding.
 
-- `mina.raw` — every bound engine function ([reference](docs/api-reference.md))
+- `mina.raw` — every bound engine function ([reference](docs/raw-api-reference.md))
 - `mina.on_event` — the 20 events the engine dispatches into Lua ([reference](docs/events.md))
 - `mina.signatures` — the same signatures the reference lists, available at runtime
 - `print` — writes to the log, tagged with your mod id

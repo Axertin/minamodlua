@@ -21,7 +21,7 @@ What the C++ side has in place before any mod code runs. [`docs/how-it-works.md`
 
 | | |
 | --- | --- |
-| `mina.raw.*` | 396 of the SDK's 426 functions, snake_cased, generated rather than hand-written. Arguments type-checked, 64-bit values rejected rather than truncated, out-params returned as extra values. Errors surface as Lua errors rather than crashes. The remaining 30 need hand-written wrappers; see "Not bound" in [`docs/api-reference.md`](docs/api-reference.md). |
+| `mina.raw.*` | 396 of the SDK's 426 functions, snake_cased, generated rather than hand-written. Arguments type-checked, 64-bit values rejected rather than truncated, out-params returned as extra values. Errors surface as Lua errors rather than crashes. The remaining 30 need hand-written wrappers; see "Not bound" in [`docs/raw-api-reference.md`](docs/raw-api-reference.md). |
 | `mina.signatures.*` | The signature strings the reference lists, keyed by Lua name, available at runtime. |
 | `mina.on_event(evt, handler)` | Event registration and dispatch. Every handler call is its own `pcall`, so an error reaches neither the engine nor another mod's handler. The log line names the event; the Lua message carries the chunk name, which is `<mod id>/main.lua`. Reports are rate-limited to 3 per `(hook, priority)` slot. Tracebacks are attached at load time only, since dispatch is too hot for `debug.traceback`. |
 | Handle userdata | `.valid`, `__eq`, `__tostring`, and generation-stamped invalidation to avoid UAF errors. |

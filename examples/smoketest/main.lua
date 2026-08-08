@@ -423,7 +423,7 @@ mina.on_event( "is_item_collected", function( e )
   if is_item_collected_in_progress then return end
   is_item_collected_in_progress = true
   -- Argument order is NOT the same as the event's field order - index comes
-  -- first here, collection and save_slot after (see docs/api-reference.md).
+  -- first here, collection and save_slot after (see docs/raw-api-reference.md).
   -- nil handles pass through as null, which is fine: collection/save_slot
   -- can legitimately be nil.
   local ok = pcall( mina.raw.items_is_item_collected, e.index, e.collection, e.save_slot, e.include_pawn_shop,
@@ -571,7 +571,7 @@ mina.on_event( "mouse_update", function( e )
       -- e.delta_x/delta_y and frame_dx/frame_dy use different coordinate
       -- systems, not just different units. mouse_get_pos() is documented as
       -- "top left is (-1,1), bottom right is (1,-1)" (see
-      -- mina.raw.mouse_get_pos in docs/api-reference.md): normalized, with Y
+      -- mina.raw.mouse_get_pos in docs/raw-api-reference.md): normalized, with Y
       -- increasing UPWARD. delta_x/delta_y are screen-space pixels with Y
       -- increasing DOWNWARD, like every other screen-space delta this
       -- project exposes. X needs no correction; Y must be negated before

@@ -47,7 +47,7 @@ That explains most of what is odd about `mina.raw`:
 - There are ~396 of them, because that is how many the engine has, minus the ones with no mechanical translation.
 - The names are transliterated, not designed. `CameraGetProjToView` becomes `camera_get_proj_to_view`, and nothing collapses `camera_*` into a `camera` table. The transform is reversible, so any name here greps against upstream's own headers.
 - No grouping, no defaults, no overloads, no convenience. Arguments arrive in the engine's order, including the ones that are always the same value.
-- 30 functions do not bind at all, listed under [Not bound](api-reference.md#not-bound) in the reference: variadics, ones taking a raw byte buffer, ones taking a C callback, ones taking an untyped pointer. `mina.on_event` covers the callback cases.
+- 30 functions do not bind at all, listed under [Not bound](raw-api-reference.md#not-bound) in the reference: variadics, ones taking a raw byte buffer, ones taking a C callback, ones taking an untyped pointer. `mina.on_event` covers the callback cases.
 
 `mina.raw` is the floor, not the ceiling. Friendlier shapes are meant to live in the Lua layer above it (`lua/mina/`), which is currently empty. Until it fills in, `mina.raw` is all there is.
 
@@ -124,7 +124,7 @@ local ok, cx, cy, cz, ex, ey, ez = mina.raw.combat_shape_get_aabb(shape, 0)
 mina.raw.component_move(component, 0, 1, 0)
 ```
 
-The reason is cost. Building a table allocates, and these calls sit in per-frame paths; a fixed run of numbers on the stack does not allocate at all. So field *order* matters and cannot be recovered from the signature, and the reference lists it under [Value types](api-reference.md#value-types). Three worth memorizing: `MM_AABB` is center-then-extents (not min/max), `MM_Transform` is rotation-scale-position (not the usual order), and `MM_Color` channels are 0–255 (not 0–1).
+The reason is cost. Building a table allocates, and these calls sit in per-frame paths; a fixed run of numbers on the stack does not allocate at all. So field *order* matters and cannot be recovered from the signature, and the reference lists it under [Value types](raw-api-reference.md#value-types). Three worth memorizing: `MM_AABB` is center-then-extents (not min/max), `MM_Transform` is rotation-scale-position (not the usual order), and `MM_Color` channels are 0–255 (not 0–1).
 
 Two values do not follow either rule. An engine string arrives as a proper Lua string, copied, so you never hold engine memory. A component type id arrives as an 8-byte **string** rather than a number, because it is a 64-bit value a double would mangle; compare it with `==` and pass it straight back in.
 
@@ -190,6 +190,6 @@ Everything else is there: the full `string`, `table`, `math`, `coroutine` and `b
 
 ## Where to look next
 
-- [`docs/api-reference.md`](api-reference.md) — every bound function, its signature in Lua terms, and the struct field orders.
+- [`docs/raw-api-reference.md`](raw-api-reference.md) — every bound function, its signature in Lua terms, and the struct field orders.
 - [`docs/events.md`](events.md) — the 20 event names, what is in each event table, which fields are writable, and the caveats found by running them against a real game.
 - [`examples/smoketest/main.lua`](../examples/smoketest/main.lua) — a worked mod that registers on all 20 events and checks each against an independent source.

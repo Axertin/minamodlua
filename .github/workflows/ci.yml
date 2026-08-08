@@ -40,19 +40,19 @@ jobs:
             -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
           cmake --build build --target apidoc
       # The reference is derived from the same headers the wrappers are, so a
-      # diff here means the SDK moved and docs/api-reference.md was not regenerated.
+      # diff here means the SDK moved and docs/raw-api-reference.md was not regenerated.
       - name: Check it is committed
         run: |
-          if [ ! -f docs/api-reference.md ]; then
-            echo "::error::docs/api-reference.md was not produced - the apidoc target did not write it"
+          if [ ! -f docs/raw-api-reference.md ]; then
+            echo "::error::docs/raw-api-reference.md was not produced - the apidoc target did not write it"
             exit 1
           fi
           # --intent-to-add first: `git diff` reports nothing for an untracked
           # path and exits 0, so without this a reference that was generated but
           # never committed would pass this gate forever.
-          git add --intent-to-add docs/api-reference.md
-          if ! git diff --exit-code -- docs/api-reference.md; then
-            echo "::error::docs/api-reference.md is stale or uncommitted - run: cmake --build build --target apidoc"
+          git add --intent-to-add docs/raw-api-reference.md
+          if ! git diff --exit-code -- docs/raw-api-reference.md; then
+            echo "::error::docs/raw-api-reference.md is stale or uncommitted - run: cmake --build build --target apidoc"
             exit 1
           fi
 

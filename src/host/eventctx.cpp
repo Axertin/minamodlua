@@ -143,7 +143,7 @@ int bit_set( lua_State* L, const char* what, const char* field, int maxIndex )
 
 // The two Lua-facing names below deliberately do NOT match the ctx struct
 // field each one reads. They follow the engine's own IsKeyDown/IsKeyHeld
-// vocabulary (mina.raw.is_key_down/is_key_held, docs/api-reference.md)
+// vocabulary (mina.raw.is_key_down/is_key_held, docs/raw-api-reference.md)
 // instead of upstream's keysDown/keysDownFirstFrame field names, because
 // upstream's names describe the *storage*, not the *semantics*, and the
 // semantics are what a mod actually needs to reason about:
